@@ -25,7 +25,7 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize SQLite database
-initDB();
+await initDB();
 
 // Initialize Socket.IO
 initSocket(io);

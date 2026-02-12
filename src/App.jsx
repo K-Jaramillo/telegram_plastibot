@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
 import { io } from 'socket.io-client';
 import BotConfig from './components/BotConfig.jsx';
+import DatabaseConfig from './components/DatabaseConfig.jsx';
 import OrdenesBoard from './components/OrdenesBoard.jsx';
 import OrdenDetalle from './components/OrdenDetalle.jsx';
 import CrearVentaModal from './components/CrearVentaModal.jsx';
@@ -139,6 +140,9 @@ export default function App() {
 
       {/* Bot Config */}
       <BotConfig botStatus={botStatus} />
+
+      {/* Database Config */}
+      <DatabaseConfig />
 
       {/* Main Content */}
       {activeTab === 'ordenes' ? (

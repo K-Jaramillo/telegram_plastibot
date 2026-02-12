@@ -1,32 +1,92 @@
-import Database from 'better-sqlite3';
+import initSqlJs from 'sql.js';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function getDBPath() {
+  // Check if there's a configured path in the database
+  if (db) {
+    const configPath = getConfig('sqlite_database_path');
+    if (configPath && configPath.trim()) {
+      return path.isAbsolute(configPath) ? configPath : path.resolve(configPath);
+    }
+  }
+  // Default path
+  return path.join(__dirname, '..', '..', 'liquidador_data.db');
+}
+
 const DB_PATH = path.join(__dirname, '..', '..', 'liquidador_data.db');
 
 let db;
 
-export function getDB() {
+// ── Helpers internos ────────────────────────────
+// sql.js devuelve arrays de arrays; estas utilidades los convierten a objetos
+function stmtAll(sql, params = []) {
+  if (!db) throw new Error('Database not initialized');
+  const stmt = db.prepare(sql);
+  if (params.length) stmt.bind(params);
+  const cols = stmt.getColumnNames();
+  const rows = [];
+  while (stmt.step()) {
+    const vals = stmt.get();
+    const obj = {};
+    cols.forEach((c, i) => (obj[c] = vals[i]));
+    rows.push(obj);
+  }
+  stmt.free();
+  return rows;
+}
+
+function stmtGet(sql, params = []) {
+  const rows = stmtAll(sql, params);
+  return rows.length ? rows[0] : undefined;
+}
+
+function stmtRun(sql, params = []) {
+  if (!db) throw new Error('Database not initialized');
+  db.run(sql, params);
+  // Devuelve el last insert rowid
+  const res = db.exec('SELECT last_insert_rowid() AS id');
+  return res.length ? res[0].values[0][0] : 0;
+}
+
+function saveDB() {
+  const dbPath = getDBPath();
+  const data = db.export();
+  const buffer = Buffer.from(data);
+  fs.writeFileSync(dbPath, buffer);
+}
+
+// ── Inicialización (asíncrona) ──────────────────
+export async function getDB() {
   if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    const dbPath = DB_PATH; // Use default path for initial load
+    const SQL = await initSqlJs();
+    if (fs.existsSync(dbPath)) {
+      const fileBuffer = fs.readFileSync(dbPath);
+      db = new SQL.Database(fileBuffer);
+    } else {
+      db = new SQL.Database();
+    }
+    db.run('PRAGMA foreign_keys = ON');
   }
   return db;
 }
 
-export function initDB() {
-  const database = getDB();
+export async function initDB() {
+  await getDB();
 
-  database.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS config (
       clave TEXT PRIMARY KEY,
       valor TEXT
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS ordenes_telegram (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fecha DATE NOT NULL DEFAULT (date('now','localtime')),
@@ -55,97 +115,104 @@ export function initDB() {
       despachado_en TIMESTAMP,
       fecha_creacion TIMESTAMP DEFAULT (datetime('now','localtime')),
       fecha_modificacion TIMESTAMP DEFAULT (datetime('now','localtime'))
-    );
+    )
   `);
 
+  saveDB();
   console.log('✅ SQLite database initialized');
 }
 
 // ── Config helpers ──────────────────────────────
 export function getConfig(clave) {
-  const row = getDB().prepare('SELECT valor FROM config WHERE clave = ?').get(clave);
-  return row ? row.valor : null;
+  try {
+    const row = stmtGet('SELECT valor FROM config WHERE clave = ?', [clave]);
+    return row ? row.valor : null;
+  } catch (err) {
+    console.error('Error in getConfig:', err.message);
+    return null;
+  }
 }
 
 export function setConfig(clave, valor) {
-  getDB()
-    .prepare('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)')
-    .run(clave, valor);
+  db.run('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', [clave, valor]);
+  saveDB();
 }
 
 // ── Órdenes CRUD ────────────────────────────────
 export function crearOrden(data) {
-  const stmt = getDB().prepare(`
-    INSERT INTO ordenes_telegram 
+  const params = [
+    data.fecha || new Date().toISOString().split('T')[0],
+    data.telegram_user_id ?? null,
+    data.telegram_username ?? null,
+    data.telegram_nombre ?? null,
+    data.mensaje_original || '',
+    data.cliente || '',
+    data.cliente_id ?? null,
+    data.productos || '',
+    data.productos_json || '[]',
+    data.notas || '',
+    data.estado || 'pendiente',
+    data.total || 0,
+    data.subtotal || 0,
+  ];
+
+  const id = stmtRun(
+    `INSERT INTO ordenes_telegram 
       (fecha, telegram_user_id, telegram_username, telegram_nombre,
        mensaje_original, cliente, cliente_id, productos, productos_json,
        notas, estado, total, subtotal)
-    VALUES 
-      (@fecha, @telegram_user_id, @telegram_username, @telegram_nombre,
-       @mensaje_original, @cliente, @cliente_id, @productos, @productos_json,
-       @notas, @estado, @total, @subtotal)
-  `);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params
+  );
 
-  const result = stmt.run({
-    fecha: data.fecha || new Date().toISOString().split('T')[0],
-    telegram_user_id: data.telegram_user_id || null,
-    telegram_username: data.telegram_username || null,
-    telegram_nombre: data.telegram_nombre || null,
-    mensaje_original: data.mensaje_original || '',
-    cliente: data.cliente || '',
-    cliente_id: data.cliente_id || null,
-    productos: data.productos || '',
-    productos_json: data.productos_json || '[]',
-    notas: data.notas || '',
-    estado: data.estado || 'pendiente',
-    total: data.total || 0,
-    subtotal: data.subtotal || 0,
-  });
-
-  return result.lastInsertRowid;
+  saveDB();
+  return id;
 }
 
 export function obtenerOrdenes(fecha, estado) {
   let sql = 'SELECT * FROM ordenes_telegram WHERE 1=1';
-  const params = {};
+  const params = [];
 
   if (fecha) {
-    sql += ' AND fecha = @fecha';
-    params.fecha = fecha;
+    sql += ' AND fecha = ?';
+    params.push(fecha);
   }
   if (estado) {
-    sql += ' AND estado = @estado';
-    params.estado = estado;
+    sql += ' AND estado = ?';
+    params.push(estado);
   }
 
   sql += ' ORDER BY id DESC';
-  return getDB().prepare(sql).all(params);
+  return stmtAll(sql, params);
 }
 
 export function obtenerOrdenPorId(id) {
-  return getDB().prepare('SELECT * FROM ordenes_telegram WHERE id = ?').get(id);
+  return stmtGet('SELECT * FROM ordenes_telegram WHERE id = ?', [id]);
 }
 
 export function actualizarOrden(id, data) {
   const fields = [];
-  const params = { id };
+  const params = [];
 
   for (const [key, value] of Object.entries(data)) {
     if (key !== 'id') {
-      fields.push(`${key} = @${key}`);
-      params[key] = value;
+      fields.push(`${key} = ?`);
+      params.push(value);
     }
   }
 
   if (fields.length === 0) return;
 
   fields.push("fecha_modificacion = datetime('now','localtime')");
-  const sql = `UPDATE ordenes_telegram SET ${fields.join(', ')} WHERE id = @id`;
-  getDB().prepare(sql).run(params);
+  params.push(id);
+  const sql = `UPDATE ordenes_telegram SET ${fields.join(', ')} WHERE id = ?`;
+  db.run(sql, params);
+  saveDB();
 }
 
 export function eliminarOrden(id) {
-  getDB().prepare('DELETE FROM ordenes_telegram WHERE id = ?').run(id);
+  db.run('DELETE FROM ordenes_telegram WHERE id = ?', [id]);
+  saveDB();
 }
 
 export function cambiarEstadoOrden(id, nuevoEstado, usuario) {
@@ -167,11 +234,22 @@ export function cambiarEstadoOrden(id, nuevoEstado, usuario) {
 }
 
 export function contarOrdenesPorEstado() {
-  return getDB()
-    .prepare(
-      `SELECT estado, COUNT(*) as total 
-       FROM ordenes_telegram 
-       GROUP BY estado`
-    )
-    .all();
+  return stmtAll(
+    `SELECT estado, COUNT(*) as total 
+     FROM ordenes_telegram 
+     GROUP BY estado`
+  );
+}
+
+export async function testSQLiteConnection() {
+  try {
+    await getDB();
+    const result = stmtGet('SELECT 1 as test');
+    if (result && result.test === 1) {
+      return { success: true, message: 'Conexión exitosa a SQLite' };
+    }
+    throw new Error('Respuesta inesperada de la base de datos');
+  } catch (err) {
+    throw new Error(`Error de conexión SQLite: ${err.message}`);
+  }
 }

@@ -1,6 +1,7 @@
 import Firebird from 'node-firebird';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getConfig } from './sqlite.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,20 +14,23 @@ function resolveDbPath(dbPath) {
   return path.resolve(path.join(__dirname, '..', '..'), dbPath);
 }
 
-const options = {
-  host: process.env.FIREBIRD_HOST || 'localhost',
-  port: parseInt(process.env.FIREBIRD_PORT || '3050'),
-  database: resolveDbPath(process.env.FIREBIRD_DATABASE),
-  user: process.env.FIREBIRD_USER || 'SYSDBA',
-  password: process.env.FIREBIRD_PASSWORD || 'masterkey',
-  lowercase_keys: false,
-  role: null,
-  pageSize: 4096,
-  timeout: 10000, // 10 segundos
-  retryConnectionInterval: 1000,
-};
-
-console.log('🔥 Firebird database path:', options.database);
+function getOptions() {
+  const configPath = getConfig('firebird_database_path');
+  const dbPath = configPath || process.env.FIREBIRD_DATABASE;
+  
+  return {
+    host: process.env.FIREBIRD_HOST || 'localhost',
+    port: parseInt(process.env.FIREBIRD_PORT || '3050'),
+    database: resolveDbPath(dbPath),
+    user: process.env.FIREBIRD_USER || 'SYSDBA',
+    password: process.env.FIREBIRD_PASSWORD || 'masterkey',
+    lowercase_keys: false,
+    role: null,
+    pageSize: 4096,
+    timeout: 10000, // 10 segundos
+    retryConnectionInterval: 1000,
+  };
+}
 
 // Retry helper
 async function retryOperation(operation, maxRetries = 3, delay = 1000) {
@@ -50,11 +54,12 @@ async function retryOperation(operation, maxRetries = 3, delay = 1000) {
 
 function query(sql, params = []) {
   return retryOperation(() => new Promise((resolve, reject) => {
+    const opts = getOptions();
     const timeout = setTimeout(() => {
       reject(new Error('Query timeout after 10 seconds'));
     }, 10000);
 
-    Firebird.attach(options, (err, db) => {
+    Firebird.attach(opts, (err, db) => {
       if (err) {
         clearTimeout(timeout);
         console.error('❌ Firebird connection error:', err.message);
@@ -77,7 +82,8 @@ function query(sql, params = []) {
 
 function execute(sql, params = []) {
   return retryOperation(() => new Promise((resolve, reject) => {
-    Firebird.attach(options, (err, db) => {
+    const opts = getOptions();
+    Firebird.attach(opts, (err, db) => {
       if (err) return reject(err);
       db.transaction(Firebird.ISOLATION_READ_COMMITTED, (err, tr) => {
         if (err) { db.detach(); return reject(err); }
@@ -100,7 +106,8 @@ function execute(sql, params = []) {
 // Execute multiple statements in a single transaction
 function executeTransaction(fn) {
   return retryOperation(() => new Promise((resolve, reject) => {
-    Firebird.attach(options, (err, db) => {
+    const opts = getOptions();
+    Firebird.attach(opts, (err, db) => {
       if (err) return reject(err);
       db.transaction(Firebird.ISOLATION_READ_COMMITTED, async (err, tr) => {
         if (err) { db.detach(); return reject(err); }
@@ -444,6 +451,25 @@ export async function obtenerDetalleFactura(ticketId) {
     ORDER BY a.ID
   `;
   return query(sql, [ticketId]);
+}
+
+export async function testFirebirdConnection() {
+  try {
+    const opts = getOptions();
+    const result = await new Promise((resolve, reject) => {
+      Firebird.attach(opts, (err, db) => {
+        if (err) return reject(err);
+        db.query('SELECT 1 FROM RDB$DATABASE', (err, result) => {
+          db.detach();
+          if (err) return reject(err);
+          resolve(result);
+        });
+      });
+    });
+    return { success: true, message: 'Conexión exitosa' };
+  } catch (err) {
+    throw new Error(`Error de conexión Firebird: ${err.message}`);
+  }
 }
 
 export { query, execute };

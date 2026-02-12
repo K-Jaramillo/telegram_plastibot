@@ -58,6 +58,58 @@ router.post('/config/token', (req, res) => {
   res.json({ success: true });
 });
 
+// ── Database Paths ──────────────────────────────
+router.get('/config/database-paths', (req, res) => {
+  try {
+    const firebird = getConfig('firebird_database_path') || process.env.FIREBIRD_DATABASE || '';
+    const sqlite = getConfig('sqlite_database_path') || '';
+    res.json({ firebird, sqlite });
+  } catch (err) {
+    console.error('Error getting database paths:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/config/database-paths', (req, res) => {
+  try {
+    const { firebird, sqlite } = req.body;
+    
+    if (firebird && firebird.trim()) {
+      setConfig('firebird_database_path', firebird.trim());
+      process.env.FIREBIRD_DATABASE = firebird.trim();
+    }
+    
+    if (sqlite && sqlite.trim()) {
+      setConfig('sqlite_database_path', sqlite.trim());
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error saving database paths:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/config/test-connection/:dbType', async (req, res) => {
+  const { dbType } = req.params;
+  
+  try {
+    if (dbType === 'firebird') {
+      const { testFirebirdConnection } = await import('../db/firebird.js');
+      const result = await testFirebirdConnection();
+      res.json({ success: true, message: 'Conexión exitosa a Firebird' });
+    } else if (dbType === 'sqlite') {
+      const { testSQLiteConnection } = await import('../db/sqlite.js');
+      const result = await testSQLiteConnection();
+      res.json({ success: true, message: 'Conexión exitosa a SQLite' });
+    } else {
+      res.status(400).json({ success: false, error: 'Tipo de base de datos no válido' });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── Órdenes ─────────────────────────────────────
 router.get('/ordenes', (req, res) => {
   const { fecha, estado } = req.query;

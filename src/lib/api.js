@@ -22,6 +22,13 @@ export const api = {
   getToken: () => request('/config/token'),
   saveToken: (token) =>
     request('/config/token', { method: 'POST', body: JSON.stringify({ token }) }),
+  
+  // Database paths
+  getDatabasePaths: () => request('/config/database-paths'),
+  saveDatabasePaths: (paths) =>
+    request('/config/database-paths', { method: 'POST', body: JSON.stringify(paths) }),
+  testDatabaseConnection: (dbType) =>
+    request(`/config/test-connection/${dbType}`, { method: 'POST' }),
 
   // Órdenes
   getOrdenes: (fecha, estado) => {
