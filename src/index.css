@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-100 text-gray-800 font-sans;
+  }
+}
+
+@layer components {
+  .sticky-note {
+    @apply rounded-lg shadow-md cursor-pointer transition-all duration-200
+      hover:shadow-lg hover:-translate-y-0.5 border-2 border-transparent;
+  }
+  .sticky-note.selected {
+    @apply border-red-600 shadow-xl;
+  }
+
+  .sticky-note.pendiente {
+    @apply bg-sticky-yellow;
+  }
+  .sticky-note.pendiente .sticky-header {
+    @apply bg-sticky-yellow-dark text-white;
+  }
+
+  .sticky-note.verificada,
+  .sticky-note.aprobado {
+    @apply bg-sticky-green;
+  }
+  .sticky-note.verificada .sticky-header,
+  .sticky-note.aprobado .sticky-header {
+    @apply bg-sticky-green-dark text-white;
+  }
+
+  .sticky-note.procesada,
+  .sticky-note.empacado,
+  .sticky-note.despachado {
+    @apply bg-sticky-blue;
+  }
+  .sticky-note.procesada .sticky-header,
+  .sticky-note.empacado .sticky-header,
+  .sticky-note.despachado .sticky-header {
+    @apply bg-sticky-blue-dark text-white;
+  }
+
+  .btn-primary {
+    @apply bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700
+      transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-success {
+    @apply bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700
+      transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-warning {
+    @apply bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700
+      transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700
+      transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-accent {
+    @apply bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700
+      transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+}
