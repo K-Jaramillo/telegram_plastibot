@@ -351,6 +351,11 @@ export class BotManager {
         return this._recibirProductos(ctx, texto);
       }
 
+      // Esperando cantidad inicial (cuando no se especificó)
+      if (session?.paso === 'esperando_cantidad_inicial') {
+        return this._recibirCantidadInicial(ctx, texto);
+      }
+
       // Esperando nueva cantidad
       if (session?.paso === 'esperando_cantidad') {
         return this._recibirNuevaCantidad(ctx, texto);
@@ -499,7 +504,11 @@ export class BotManager {
     if (!productosParsed.length) {
       return ctx.reply(
         '⚠️ No pude interpretar los productos.\n\n' +
-        'Escribe en formato:\n`10 nombre del producto`\n`5 otro producto`',
+        'Escribe en formato:\n' +
+        '`10 producto` — (cantidad al inicio)\n' +
+        '`producto` — (te preguntaré la cantidad)\n\n' +
+        '💡 *Nota:* Si el producto tiene "x50" en su nombre (como "Yumbo x50"), ' +
+        'NO escribas el número al inicio, así evitas confusiones.',
         { parse_mode: 'Markdown' }
       );
     }
@@ -743,6 +752,20 @@ export class BotManager {
 
     const prod = pendientes[idx];
     const progreso = `(${idx + 1}/${pendientes.length})`;
+
+    // Si el producto NO tiene cantidad especificada, preguntar primero
+    if (prod.cantidad === null) {
+      session.paso = 'esperando_cantidad_inicial';
+      session.editando_idx = idx;
+      this._setSession(ctx.from.id, session);
+
+      await ctx.reply(
+        `${progreso} 📦 *"${prod.original}"*\n\n` +
+        `¿Cuántas unidades deseas?`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
 
     if (prod.coincidencias.length === 0) {
       const kb = new InlineKeyboard()
@@ -1035,6 +1058,25 @@ export class BotManager {
     await this._mostrarSiguienteProducto(ctx);
   }
 
+  async _recibirCantidadInicial(ctx, texto) {
+    const session = this._getSession(ctx.from.id);
+    if (!session) return;
+
+    const cantidad = parseInt(texto);
+    if (isNaN(cantidad) || cantidad < 1) {
+      return ctx.reply('⚠️ Escribe un número válido (mínimo 1):');
+    }
+
+    const idx = session.editando_idx;
+    session.productos_pendientes[idx].cantidad = cantidad;
+    session.paso = 'verificando_stock';
+    delete session.editando_idx;
+    this._setSession(ctx.from.id, session);
+
+    await ctx.reply(`✅ Cantidad establecida: *${cantidad}*`, { parse_mode: 'Markdown' });
+    await this._mostrarSiguienteProducto(ctx);
+  }
+
   async _onReintentarProducto(ctx, data) {
     const idx = parseInt(data.split(':')[1]);
 
@@ -1249,17 +1291,22 @@ export class BotManager {
     const lineas = texto.split('\n').map((l) => l.trim()).filter(Boolean);
     const productos = [];
     for (const linea of lineas) {
+      // SOLO reconocer cantidad al INICIO de la línea: "10 producto" o "10x producto"
       let match = linea.match(/^(\d+)\s*[xX]?\s+(.+)$/);
       if (match) {
-        productos.push({ cantidad: parseInt(match[1]), descripcion: match[2].trim() });
+        productos.push({ 
+          cantidad: parseInt(match[1]), 
+          descripcion: match[2].trim(),
+          cantidadEspecificada: true 
+        });
         continue;
       }
-      match = linea.match(/^(.+?)\s*[xX]\s*(\d+)$/);
-      if (match) {
-        productos.push({ cantidad: parseInt(match[2]), descripcion: match[1].trim() });
-        continue;
-      }
-      productos.push({ cantidad: 1, descripcion: linea });
+      // Si no hay cantidad al inicio, marcar para pedir confirmación
+      productos.push({ 
+        cantidad: null, // Sin cantidad definida
+        descripcion: linea,
+        cantidadEspecificada: false 
+      });
     }
     return productos;
   }
@@ -1281,7 +1328,11 @@ export class BotManager {
       `💡 *Flujo de pedido:*\n` +
       `  1️⃣ Escribe nombre del cliente\n` +
       `  2️⃣ Confirma el cliente correcto\n` +
-      `  3️⃣ Escribe los productos con cantidades\n` +
+      `  3️⃣ Escribe los productos:\n` +
+      `     • \`10 producto\` (con cantidad al inicio)\n` +
+      `     • \`producto\` (el bot preguntará cuántos)\n` +
+      `     • *Nota:* Si el producto tiene "x50" en el nombre,\n` +
+      `       NO escribas cantidad al inicio\n` +
       `  4️⃣ Verifica stock y precios\n` +
       `  5️⃣ Confirma y crea la orden`,
       { parse_mode: 'Markdown' }
