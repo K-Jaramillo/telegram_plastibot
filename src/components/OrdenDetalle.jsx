@@ -70,6 +70,12 @@ export default function OrdenDetalle({ orden, onCambiarEstado }) {
             <span className="text-gray-500">Cliente:</span>{' '}
             <span className="font-bold">{orden.cliente || '—'}</span>
           </div>
+          {orden.cliente_telefono && (
+            <div>
+              <span className="text-gray-500">Teléfono:</span>{' '}
+              <span className="font-bold">📱 {orden.cliente_telefono}</span>
+            </div>
+          )}
           <div>
             <span className="text-gray-500">Fecha:</span>{' '}
             {orden.fecha_creacion

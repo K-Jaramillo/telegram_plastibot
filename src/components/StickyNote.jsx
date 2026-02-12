@@ -71,6 +71,13 @@ export default function StickyNote({ orden, selected, onClick }) {
           </span>
         </div>
 
+        {orden.cliente_telefono && (
+          <div className="flex items-center gap-1">
+            <span>📱</span>
+            <span className="text-xs truncate">{orden.cliente_telefono}</span>
+          </div>
+        )}
+
         <hr className="border-black/10" />
 
         {/* Products */}

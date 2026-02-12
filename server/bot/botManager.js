@@ -203,19 +203,7 @@ export class BotManager {
 
     // ── /productos ──
     bot.command('productos', async (ctx) => {
-      try {
-        const prods = this.productosCache.length > 0
-          ? this.productosCache.slice(0, 20)
-          : (await obtenerProductos()).slice(0, 20);
-        if (!prods.length) return ctx.reply('📦 No hay productos con stock');
-        let msg = '📦 *Productos con Stock:*\n\n';
-        for (const p of prods) {
-          msg += `• *${p.DESCRIPCION}*\n  \`${p.CODIGO}\` — Stock: ${p.STOCK} — $${Number(p.PRECIO).toFixed(2)}\n`;
-        }
-        await ctx.reply(msg, { parse_mode: 'Markdown' });
-      } catch (err) {
-        await ctx.reply(`⚠️ Error: ${err.message}`);
-      }
+      await this._mostrarListaProductos(ctx, 0);
     });
 
     // ── /buscar, /b ──
@@ -278,6 +266,14 @@ export class BotManager {
         if (data === 'cmd_ayuda') {
           await ctx.answerCallbackQuery();
           return this._enviarAyuda(ctx);
+        }
+        if (data === 'noop') {
+          return ctx.answerCallbackQuery();
+        }
+        if (data.startsWith('prod_page:')) {
+          const page = parseInt(data.split(':')[1]);
+          await ctx.answerCallbackQuery();
+          return this._mostrarListaProductos(ctx, page, ctx.callbackQuery.message.message_id);
         }
         if (data.startsWith('sel_cli:')) {
           return this._onClienteSeleccionado(ctx, data.substring(8));
@@ -344,6 +340,11 @@ export class BotManager {
       // Esperando nombre de cliente
       if (session?.paso === 'esperando_cliente') {
         return this._buscarYMostrarClientes(ctx, texto, true);
+      }
+
+      // Esperando teléfono del cliente
+      if (session?.paso === 'esperando_telefono') {
+        return this._recibirTelefono(ctx, texto);
       }
 
       // Esperando productos
@@ -447,21 +448,34 @@ export class BotManager {
       }
 
       const kb = new InlineKeyboard();
-      const unicos = [...new Set(clientes.map((c) => c.NOMBRE))];
+      // Eliminar duplicados manteniendo el primer cliente con ese nombre
+      const clientesUnicos = [];
+      const nombresVistos = new Set();
+      for (const c of clientes) {
+        if (!nombresVistos.has(c.NOMBRE)) {
+          nombresVistos.add(c.NOMBRE);
+          clientesUnicos.push(c);
+        }
+      }
 
-      for (const nombre of unicos.slice(0, 8)) {
-        kb.text(nombre, `sel_cli:${nombre}`).row();
+      for (const cliente of clientesUnicos.slice(0, 8)) {
+        // Pasar ID en lugar de solo nombre
+        kb.text(cliente.NOMBRE, `sel_cli:${cliente.ID}`).row();
       }
       kb.text('🔄 Buscar otro', 'buscar_otro_cliente');
 
       let msg = `👥 *Clientes encontrados para "${texto}":*\n\n`;
-      unicos.slice(0, 8).forEach((n, i) => {
-        msg += `${i + 1}. ${n}\n`;
+      clientesUnicos.slice(0, 8).forEach((c, i) => {
+        msg += `${i + 1}. ${c.NOMBRE}\n`;
       });
       msg += '\n_Selecciona el cliente correcto:_';
 
       if (iniciarFlujo) {
-        this._setSession(ctx.from.id, { paso: 'seleccionando_cliente', busqueda: texto });
+        this._setSession(ctx.from.id, { 
+          paso: 'seleccionando_cliente', 
+          busqueda: texto,
+          clientes_encontrados: clientesUnicos.slice(0, 8) // Guardar para consulta posterior
+        });
       }
 
       await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: kb });
@@ -470,12 +484,46 @@ export class BotManager {
     }
   }
 
-  async _onClienteSeleccionado(ctx, clienteNombre) {
-    await ctx.answerCallbackQuery({ text: `✅ ${clienteNombre}` });
+  async _onClienteSeleccionado(ctx, clienteId) {
+    const session = this._getSession(ctx.from.id);
+    if (!session?.clientes_encontrados) {
+      return ctx.answerCallbackQuery({ text: 'Sesión expirada' });
+    }
 
+    // Buscar el cliente en la lista guardada
+    const cliente = session.clientes_encontrados.find(c => c.ID == clienteId);
+    if (!cliente) {
+      return ctx.answerCallbackQuery({ text: 'Cliente no encontrado' });
+    }
+
+    await ctx.answerCallbackQuery({ text: `✅ ${cliente.NOMBRE}` });
+
+    // Verificar si el cliente tiene teléfono
+    const telefono = (cliente.TELEFONO || '').trim();
+    
+    if (!telefono) {
+      // Cliente sin teléfono - pedir número
+      this._setSession(ctx.from.id, {
+        paso: 'esperando_telefono',
+        cliente_id: cliente.ID,
+        cliente_nombre: cliente.NOMBRE,
+      });
+
+      await ctx.editMessageText(
+        `✅ *Cliente:* ${cliente.NOMBRE}\n\n` +
+        `⚠️ Este cliente no tiene teléfono registrado.\n\n` +
+        `📱 Por favor, escribe el número de teléfono del cliente:`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    // Cliente con teléfono - continuar normalmente
     this._setSession(ctx.from.id, {
       paso: 'esperando_productos',
-      cliente: clienteNombre,
+      cliente_id: cliente.ID,
+      cliente: cliente.NOMBRE,
+      cliente_telefono: telefono,
       productos_texto: '',
       productos_confirmados: [],
       productos_pendientes: [],
@@ -483,7 +531,45 @@ export class BotManager {
     });
 
     await ctx.editMessageText(
-      `✅ *Cliente:* ${clienteNombre}\n\n` +
+      `✅ *Cliente:* ${cliente.NOMBRE}\n` +
+      `📱 *Teléfono:* ${telefono}\n\n` +
+      `📝 Ahora escribe los productos del pedido.\n` +
+      `Un producto por línea con la cantidad:\n\n` +
+      '```\n10 bolsa 8x12 negra\n5 camiseta blanca\n20 vaso desechable\n```\n\n' +
+      `_Escribe /cancelar para cancelar el pedido_`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  async _recibirTelefono(ctx, texto) {
+    const session = this._getSession(ctx.from.id);
+    if (!session?.cliente_nombre) return;
+
+    // Validar que sea un número de teléfono válido
+    const telefonoLimpio = texto.replace(/[^\d]/g, ''); // Solo números
+    
+    if (telefonoLimpio.length < 7 || telefonoLimpio.length > 15) {
+      return ctx.reply(
+        '⚠️ Por favor, ingresa un número de teléfono válido (7-15 dígitos).\n\n' +
+        'Ejemplo: 3001234567 o 300-123-4567'
+      );
+    }
+
+    // Guardar teléfono en la sesión y continuar
+    this._setSession(ctx.from.id, {
+      paso: 'esperando_productos',
+      cliente_id: session.cliente_id,
+      cliente: session.cliente_nombre,
+      cliente_telefono: texto.trim(),
+      productos_texto: '',
+      productos_confirmados: [],
+      productos_pendientes: [],
+      producto_actual_idx: 0,
+    });
+
+    await ctx.reply(
+      `✅ *Cliente:* ${session.cliente_nombre}\n` +
+      `📱 *Teléfono:* ${texto.trim()}\n\n` +
       `📝 Ahora escribe los productos del pedido.\n` +
       `Un producto por línea con la cantidad:\n\n` +
       '```\n10 bolsa 8x12 negra\n5 camiseta blanca\n20 vaso desechable\n```\n\n' +
@@ -1253,6 +1339,8 @@ export class BotManager {
       telegram_nombre: `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim(),
       mensaje_original: session.productos_texto || '',
       cliente: session.cliente,
+      cliente_id: session.cliente_id || null,
+      cliente_telefono: session.cliente_telefono || '',
       productos: productos.map((p) => `${p.cantidad} ${p.descripcion}`).join('\n'),
       productos_json: JSON.stringify(productos),
       notas: notaFinal,
@@ -1264,6 +1352,9 @@ export class BotManager {
 
     let msg = `🎉 *¡Orden #${ordenId} creada exitosamente!*\n\n`;
     msg += `👤 *Cliente:* ${session.cliente}\n`;
+    if (session.cliente_telefono) {
+      msg += `📱 *Teléfono:* ${session.cliente_telefono}\n`;
+    }
     msg += `📦 *Productos:*\n`;
     for (const p of productos) {
       msg += `  • ${p.cantidad}× ${p.descripcion} — $${(p.cantidad * p.precio).toFixed(2)}\n`;
@@ -1337,5 +1428,77 @@ export class BotManager {
       `  5️⃣ Confirma y crea la orden`,
       { parse_mode: 'Markdown' }
     );
+  }
+
+  async _mostrarListaProductos(ctx, page = 0, messageId = null) {
+    try {
+      const PRODUCTOS_POR_PAGINA = 30;
+      
+      // Obtener productos con stock
+      const todosProds = this.productosCache.length > 0
+        ? this.productosCache
+        : await obtenerProductos();
+
+      if (!todosProds.length) {
+        return ctx.reply('📦 No hay productos con stock');
+      }
+
+      // Ordenar alfabéticamente
+      todosProds.sort((a, b) => a.DESCRIPCION.localeCompare(b.DESCRIPCION));
+
+      const totalProductos = todosProds.length;
+      const totalPaginas = Math.ceil(totalProductos / PRODUCTOS_POR_PAGINA);
+      const paginaActual = Math.max(0, Math.min(page, totalPaginas - 1));
+      
+      const inicio = paginaActual * PRODUCTOS_POR_PAGINA;
+      const fin = Math.min(inicio + PRODUCTOS_POR_PAGINA, totalProductos);
+      const prods = todosProds.slice(inicio, fin);
+
+      // Construir mensaje organizado
+      let msg = `📦 *Catálogo de Productos* (${totalProductos} con stock)\n`;
+      msg += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      msg += `Página *${paginaActual + 1}* de *${totalPaginas}* • Mostrando ${inicio + 1}-${fin}\n\n`;
+
+      for (const p of prods) {
+        const stock = Number(p.STOCK || 0);
+        const precio = Number(p.PRECIO || 0);
+        const stockIcon = stock > 10 ? '✅' : stock > 0 ? '⚠️' : '❌';
+        
+        msg += `${stockIcon} *${p.DESCRIPCION}*\n`;
+        msg += `   📦 Stock: *${stock}* unid. | 💰 $${precio.toFixed(2)}\n`;
+        msg += `   🔖 Código: \`${p.CODIGO}\`\n\n`;
+      }
+
+      msg += `━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      // Botones de navegación
+      const kb = new InlineKeyboard();
+      
+      if (paginaActual > 0) {
+        kb.text('⬅️ Anterior', `prod_page:${paginaActual - 1}`);
+      }
+      
+      kb.text(`📄 ${paginaActual + 1}/${totalPaginas}`, 'noop');
+      
+      if (paginaActual < totalPaginas - 1) {
+        kb.text('Siguiente ➡️', `prod_page:${paginaActual + 1}`);
+      }
+
+      // Si es actualización de mensaje existente, editar
+      if (messageId) {
+        await ctx.editMessageText(msg, { 
+          parse_mode: 'Markdown',
+          reply_markup: kb 
+        });
+      } else {
+        await ctx.reply(msg, { 
+          parse_mode: 'Markdown',
+          reply_markup: kb 
+        });
+      }
+    } catch (err) {
+      console.error('Error mostrando productos:', err);
+      await ctx.reply(`⚠️ Error al cargar productos: ${err.message}`);
+    }
   }
 }

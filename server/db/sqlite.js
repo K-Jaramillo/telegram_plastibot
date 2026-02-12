@@ -96,6 +96,7 @@ export async function initDB() {
       mensaje_original TEXT,
       cliente TEXT,
       cliente_id INTEGER,
+      cliente_telefono TEXT,
       productos TEXT,
       productos_json TEXT,
       notas TEXT,
@@ -117,6 +118,21 @@ export async function initDB() {
       fecha_modificacion TIMESTAMP DEFAULT (datetime('now','localtime'))
     )
   `);
+
+  // Migración: Agregar columna cliente_telefono si no existe
+  try {
+    const tableInfo = db.exec("PRAGMA table_info(ordenes_telegram)");
+    const columns = tableInfo[0]?.values?.map(col => col[1]) || [];
+    
+    if (!columns.includes('cliente_telefono')) {
+      console.log('🔄 Migrando base de datos: agregando columna cliente_telefono...');
+      db.run('ALTER TABLE ordenes_telegram ADD COLUMN cliente_telefono TEXT');
+      saveDB();
+      console.log('✅ Migración completada');
+    }
+  } catch (err) {
+    console.error('⚠️ Error en migración:', err.message);
+  }
 
   saveDB();
   console.log('✅ SQLite database initialized');
@@ -148,6 +164,7 @@ export function crearOrden(data) {
     data.mensaje_original || '',
     data.cliente || '',
     data.cliente_id ?? null,
+    data.cliente_telefono || '',
     data.productos || '',
     data.productos_json || '[]',
     data.notas || '',
@@ -159,9 +176,9 @@ export function crearOrden(data) {
   const id = stmtRun(
     `INSERT INTO ordenes_telegram 
       (fecha, telegram_user_id, telegram_username, telegram_nombre,
-       mensaje_original, cliente, cliente_id, productos, productos_json,
+       mensaje_original, cliente, cliente_id, cliente_telefono, productos, productos_json,
        notas, estado, total, subtotal)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     params
   );
 

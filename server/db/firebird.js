@@ -197,36 +197,79 @@ export async function verificarStock(codigo) {
 
 // ── Clientes ────────────────────────────────────
 export async function buscarClientes(texto) {
-  // Split into words and search each word in NOMBRES or APELLIDOS
-  const palabras = texto.trim().split(/\s+/).filter(p => p.length >= 2);
+  const textoLimpio = texto.trim();
+  if (textoLimpio.length < 2) return [];
+
+  // Estrategia simplificada: Buscar en NOMBRES y APELLIDOS por separado
+  // Luego filtrar en JavaScript
+  const palabrasIgnorar = ['LA', 'EL', 'DE', 'DEL', 'LOS', 'LAS', 'Y'];
+  const palabras = textoLimpio
+    .split(/\s+/)
+    .filter(p => p.length >= 1); // Aceptar todas las palabras, incluso de 1 letra
+
   if (palabras.length === 0) return [];
 
-  const condiciones = palabras.map(() =>
-    '(UPPER(NOMBRES) LIKE UPPER(?) OR UPPER(APELLIDOS) LIKE UPPER(?))'
-  ).join(' AND ');
+  // Filtrar palabras significativas
+  const palabrasSignificativas = palabras.filter(p => 
+    p.length >= 2 && !palabrasIgnorar.includes(p.toUpperCase())
+  );
+
+  // Si hay palabras significativas, usarlas; sino usar todas
+  const palabrasBuscar = palabrasSignificativas.length > 0 ? palabrasSignificativas : palabras;
+
+  // Buscar que AL MENOS UNA palabra coincida en NOMBRES o APELLIDOS
+  const condiciones = palabrasBuscar.map(() =>
+    '(UPPER(NOMBRES) CONTAINING UPPER(?) OR UPPER(APELLIDOS) CONTAINING UPPER(?))'
+  ).join(' OR ');
 
   const params = [];
-  for (const p of palabras) {
-    params.push(`%${p}%`, `%${p}%`);
+  for (const p of palabrasBuscar) {
+    params.push(p, p);
   }
 
   const sql = `
-    SELECT FIRST 30 ID, NOMBRES, APELLIDOS
+    SELECT FIRST 50 ID, NOMBRES, APELLIDOS, TELEFONO
     FROM CLIENTESV2
     WHERE ACTIVO = 1
       AND (${condiciones})
     ORDER BY NOMBRES
   `;
+  
   const rows = await query(sql, params);
-  return rows.map(r => ({
+  
+  // Mapear resultados
+  const resultados = rows.map(r => ({
     ID: r.ID,
     NOMBRE: ((r.NOMBRES || '').trim() + ' ' + (r.APELLIDOS || '').trim()).trim(),
+    TELEFONO: r.TELEFONO || '',
+    _nombreCompleto: ((r.NOMBRES || '') + ' ' + (r.APELLIDOS || '')).toUpperCase().trim(),
+  }));
+
+  // Filtro adicional en JavaScript: priorizar coincidencias exactas del texto completo
+  const textoUpper = textoLimpio.toUpperCase();
+  const conCoincidenciaExacta = resultados.filter(r => 
+    r._nombreCompleto.includes(textoUpper)
+  );
+
+  if (conCoincidenciaExacta.length > 0) {
+    return conCoincidenciaExacta.slice(0, 30).map(r => ({
+      ID: r.ID,
+      NOMBRE: r.NOMBRE,
+      TELEFONO: r.TELEFONO,
+    }));
+  }
+
+  // Si no hay coincidencia exacta, retornar todos los resultados
+  return resultados.slice(0, 30).map(r => ({
+    ID: r.ID,
+    NOMBRE: r.NOMBRE,
+    TELEFONO: r.TELEFONO,
   }));
 }
 
 export async function obtenerClientes() {
   const sql = `
-    SELECT FIRST 200 ID, NOMBRES, APELLIDOS
+    SELECT FIRST 200 ID, NOMBRES, APELLIDOS, TELEFONO
     FROM CLIENTESV2
     WHERE ACTIVO = 1
     ORDER BY NOMBRES
@@ -235,6 +278,7 @@ export async function obtenerClientes() {
   return rows.map(r => ({
     ID: r.ID,
     NOMBRE: ((r.NOMBRES || '').trim() + ' ' + (r.APELLIDOS || '').trim()).trim(),
+    TELEFONO: r.TELEFONO || '',
   }));
 }
 
